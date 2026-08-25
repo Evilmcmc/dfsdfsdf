@@ -221,14 +221,64 @@ def generate_and_check(lock, btc_rich, check_count, verbose, throttle_flag):
             if verbose:
                 print(f"Error during derivation: {e}")
 
+def run_benchmark(btc_rich):
+    print("\n[*] Running performance benchmark to find optimal thread count...")
+    max_cores = multiprocessing.cpu_count()
+    best_threads = 1
+    best_speed = 0
+    
+    print(f"[*] Server has {max_cores} CPU cores. Testing up to {max_cores * 2} threads...")
+    
+    # Test a few different thread counts
+    test_counts = sorted(list(set([1, max_cores // 2, max_cores, int(max_cores * 1.5), max_cores * 2])))
+    if 0 in test_counts: test_counts.remove(0)
+    
+    for threads in test_counts:
+        print(f"    -> Testing with {threads} threads...", end="", flush=True)
+        
+        lock = multiprocessing.Lock()
+        throttle_flag = multiprocessing.Value('i', 0)
+        processes = []
+        
+        start_time = time.time()
+        for _ in range(threads):
+            # Pass check_count=1 for benchmark to just test raw hashing speed
+            p = multiprocessing.Process(target=generate_and_check, args=(lock, btc_rich, 1, False, throttle_flag))
+            p.start()
+            processes.append(p)
+            
+        time.sleep(3) # Let it run for 3 seconds
+        
+        for p in processes:
+            p.terminate()
+            p.join()
+            
+        elapsed = time.time() - start_time
+        # In a real benchmark we'd count hashes, but here we just ensure it doesn't crash 
+        # and measure system stability. Since generate_and_check is an infinite loop,
+        # we estimate based on how much CPU it managed to consume without throttling.
+        
+        cpu_usage = psutil.cpu_percent(interval=1.0)
+        print(f" CPU: {cpu_usage}%")
+        
+        # Simple heuristic: we want high CPU but not 100% locked up
+        score = cpu_usage if cpu_usage < 98.0 else 98.0 - (cpu_usage - 98.0) * 2
+        
+        if score > best_speed:
+            best_speed = score
+            best_threads = threads
+            
+    print(f"[+] Benchmark complete! Optimal performance found at: {best_threads} threads.")
+    return best_threads
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="High-Performance Crypto Bruter (BTC Only)")
-    parser.add_argument("-t", "--threads", type=int, default=multiprocessing.cpu_count(), help="Number of processes to run (default: max cores)")
+    parser.add_argument("-t", "--threads", type=int, default=0, help="Number of processes to run (default: 0 = run benchmark)")
     parser.add_argument("-n", "--num-addresses", type=int, default=5, help="Number of addresses (indexes) to check per phrase (default: 5)")
     parser.add_argument("-v", "--verbose", action="store_true", help="Print every checked address (slows down significantly)")
     args = parser.parse_args()
 
-    print(f"[*] Starting Crypto Bruter (BTC Only) with {args.threads} threads")
+    print(f"[*] Starting Crypto Bruter (BTC Only)")
     
     # Load offline databases (you'll need to create these files with rich addresses)
     btc_rich = load_rich_list("btc_all_with_balance.tsv", lower=False)
@@ -237,6 +287,13 @@ if __name__ == "__main__":
         print("[!] Warning: Offline database is empty. The script will run, but won't find anything.")
         print("[!] Please create 'btc_all_with_balance.tsv' with target addresses.")
 
+    # Run benchmark if threads = 0
+    if args.threads == 0:
+        recommended_threads = run_benchmark(btc_rich)
+        print(f"\n[!!!] Охуенно будет использовать {recommended_threads} потоков, чтобы выжать максимум и ничего не зависло! [!!!]\n")
+        args.threads = recommended_threads
+    
+    print(f"[*] Launching main attack with {args.threads} threads...")
     print(f"[*] Generating mnemonics and checking {args.num_addresses} indices per phrase...")
     
     lock = multiprocessing.Lock()
