@@ -328,28 +328,34 @@ if __name__ == "__main__":
             cpu_usage = psutil.cpu_percent(interval=1.0)
             current_limit = dynamic_rps_limit.value
             
-            if cpu_usage > 94.0:
-                if current_limit == 0:
-                    dynamic_rps_limit.value = 500 # Start limiting if we weren't
-                else:
-                    # Drop RPS by 10% or at least 10 hashes
-                    drop_amount = max(10, int(current_limit * 0.10))
-                    dynamic_rps_limit.value = max(10, current_limit - drop_amount)
-                
+            # If we haven't started limiting yet, set a baseline
+            if current_limit == 0 and cpu_usage > 94.0:
+                dynamic_rps_limit.value = 500
                 if not args.verbose:
-                    print(f"\r\033[K[!] High CPU ({cpu_usage}% > 93%). Dropping RPS limit to: {dynamic_rps_limit.value}/thread", end="", flush=True)
-                    
-            elif cpu_usage < 92.0 and current_limit > 0:
-                # Increase RPS slightly if we have breathing room
-                increase_amount = max(5, int(current_limit * 0.05))
-                dynamic_rps_limit.value = current_limit + increase_amount
+                    print(f"\r\033[K[!] CPU spiked ({cpu_usage}%). Engaging RPS limit: 500/thread", end="", flush=True)
+                continue
                 
-                if not args.verbose:
-                    print(f"\r\033[K[+] CPU normal ({cpu_usage}% < 93%). Raising RPS limit to: {dynamic_rps_limit.value}/thread", end="", flush=True)
-                    
+            if current_limit > 0:
+                error = cpu_usage - 93.0
+                
+                # Proportional adjustment: The further away from 93%, the harder we correct, 
+                # but we use small flat numbers to prevent wild oscillation.
+                if error > 5.0:    # CPU > 98% (Panic drop)
+                    dynamic_rps_limit.value = max(10, current_limit - 15)
+                    if not args.verbose: print(f"\r\033[K[!] High CPU ({cpu_usage}%). Hard drop RPS to: {dynamic_rps_limit.value}/thread", end="", flush=True)
+                elif error > 1.0:  # CPU 94% - 98% (Gentle drop)
+                    dynamic_rps_limit.value = max(10, current_limit - 2)
+                    if not args.verbose: print(f"\r\033[K[-] CPU ({cpu_usage}% > 93%). Nudging RPS down to: {dynamic_rps_limit.value}/thread", end="", flush=True)
+                elif error < -5.0: # CPU < 88% (Aggressive increase)
+                    dynamic_rps_limit.value = current_limit + 5
+                    if not args.verbose: print(f"\r\033[K[+] Low CPU ({cpu_usage}%). Raising RPS to: {dynamic_rps_limit.value}/thread", end="", flush=True)
+                elif error < -1.0: # CPU 88% - 92% (Gentle increase)
+                    dynamic_rps_limit.value = current_limit + 1
+                    if not args.verbose: print(f"\r\033[K[+] CPU ({cpu_usage}% < 93%). Nudging RPS up to: {dynamic_rps_limit.value}/thread", end="", flush=True)
+                else:              # CPU 92% - 94% (Perfect!)
+                    if not args.verbose: print(f"\r\033[K[*] CPU: {cpu_usage}%. Target 93% met. Stable at RPS: {current_limit}/thread.", end="", flush=True)
             elif not args.verbose:
-                 status_msg = "No RPS limit (Full speed)" if current_limit == 0 else f"Target 93% met. RPS: {current_limit}/thread"
-                 print(f"\r\033[K[*] CPU: {cpu_usage}%. {status_msg}.", end="", flush=True)
+                 print(f"\r\033[K[*] CPU: {cpu_usage}%. No RPS limit (Full speed).", end="", flush=True)
                  
     except KeyboardInterrupt:
         print("\n\n[*] Stopping bruter.")
