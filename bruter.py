@@ -325,86 +325,49 @@ if __name__ == "__main__":
             
         print("[*] Adaptive RPS throttling active. Monitoring CPU usage...")
         
-        # --- Memory Load ---
-        memory_file = "rps_memory.txt"
         known_good_rps = starting_rps if starting_rps > 0 else 500
-        penalty_factor = 1.0
-        try:
-            if os.path.exists(memory_file):
-                with open(memory_file, "r") as f:
-                    parts = f.read().strip().split(",")
-                    if len(parts) == 2:
-                        known_good_rps = int(parts[0])
-                        penalty_factor = float(parts[1])
-                        print(f"[*] Loaded memory: Optimal RPS ~{known_good_rps}, Penalty: {penalty_factor:.1f}")
-        except Exception:
-            pass
-        # -------------------
-        
-        last_action = "none"
         
         while any(p.is_alive() for p in processes):
             cpu_usage = psutil.cpu_percent(interval=1.0)
             current_limit = dynamic_rps_limit.value
             
             # If we haven't started limiting yet, set a baseline
-            if current_limit == 0 and cpu_usage > 95.0:
+            if current_limit == 0 and cpu_usage > 94.0:
                 dynamic_rps_limit.value = known_good_rps
                 if not args.verbose:
                     print(f"\r\033[K[!] CPU spiked ({cpu_usage}%). Engaging RPS limit: {dynamic_rps_limit.value}/thread", end="", flush=True)
                 continue
                 
             if current_limit > 0:
-                # Did we overreact on the last drop?
-                if cpu_usage < 80.0 and last_action == "drop":
-                    penalty_factor += 0.5  # Punish the algorithm: next drops will be weaker
-                    if not args.verbose: print(f"\r\033[K[!] Algorithm punished (CPU crashed to {cpu_usage}%). Dampening factor: {penalty_factor:.1f}", end="", flush=True)
-                
-                # Did we recover well? Slowly forgive the penalty.
-                if 90.0 <= cpu_usage <= 95.0 and penalty_factor > 1.0:
-                    penalty_factor = max(1.0, penalty_factor - 0.1)
-
-                if cpu_usage > 98.0:    # Panic drop
-                    drop_val = max(1, int(20 / penalty_factor))
+                # Proportional adjustment using PERCENTAGES for geometric scaling
+                if cpu_usage > 98.0:    # Panic drop (Drop by 15%)
+                    drop_val = max(5, int(current_limit * 0.15))
                     dynamic_rps_limit.value = max(10, current_limit - drop_val)
-                    last_action = "drop"
                     if not args.verbose: print(f"\r\033[K[!] High CPU ({cpu_usage}%). Hard drop RPS to: {dynamic_rps_limit.value}/thread (Total: {dynamic_rps_limit.value * args.threads}/s)", end="", flush=True)
                     
-                elif cpu_usage > 95.0:  # Gentle drop
-                    drop_val = max(1, int(5 / penalty_factor))
+                elif cpu_usage > 95.0:  # Gentle drop (Drop by 5%)
+                    drop_val = max(2, int(current_limit * 0.05))
                     dynamic_rps_limit.value = max(10, current_limit - drop_val)
-                    last_action = "drop"
                     if not args.verbose: print(f"\r\033[K[-] CPU ({cpu_usage}% > 95%). Nudging RPS down to: {dynamic_rps_limit.value}/thread (Total: {dynamic_rps_limit.value * args.threads}/s)", end="", flush=True)
                     
-                elif cpu_usage >= 93.0: # SAFE ZONE (93-95%)
+                elif cpu_usage >= 90.0: # SAFE ZONE (90-95%)
                     known_good_rps = current_limit
-                    last_action = "hold"
-                    # --- Memory Save ---
-                    try:
-                        with open(memory_file, "w") as f:
-                            f.write(f"{known_good_rps},{penalty_factor:.2f}")
-                    except Exception:
-                        pass
-                    # -------------------
-                    if not args.verbose: print(f"\r\033[K[*] CPU: {cpu_usage}%. SAFE ZONE (93-95%). Stable at RPS: {current_limit}/thread (Total: {current_limit * args.threads}/s)", end="", flush=True)
+                    if not args.verbose: print(f"\r\033[K[*] CPU: {cpu_usage}%. SAFE ZONE (90-95%). Stable at RPS: {current_limit}/thread (Total: {current_limit * args.threads}/s)", end="", flush=True)
                     
-                elif cpu_usage < 40.0: # ALARM!
-                    target = max(current_limit + 5, known_good_rps)
-                    dynamic_rps_limit.value = min(current_limit + 10, target)
-                    last_action = "raise"
-                    if not args.verbose: print(f"\r\033[K[!] ALARM! CPU critically low ({cpu_usage}%). Cautiously raising RPS to: {dynamic_rps_limit.value}/thread (Total: {dynamic_rps_limit.value * args.threads}/s)", end="", flush=True)
-                    
-                elif cpu_usage < 88.0: # Aggressive increase
-                    inc_val = max(1, int(10 / penalty_factor))
+                elif cpu_usage < 50.0: # ALARM! Massive reserve, boost by 25%
+                    inc_val = max(10, int(current_limit * 0.25))
                     dynamic_rps_limit.value = current_limit + inc_val
-                    last_action = "raise"
+                    if not args.verbose: print(f"\r\033[K[!] CPU critically low ({cpu_usage}%). BOOSTING RPS to: {dynamic_rps_limit.value}/thread (Total: {dynamic_rps_limit.value * args.threads}/s)", end="", flush=True)
+                    
+                elif cpu_usage < 80.0: # Aggressive increase (Boost by 10%)
+                    inc_val = max(5, int(current_limit * 0.10))
+                    dynamic_rps_limit.value = current_limit + inc_val
                     if not args.verbose: print(f"\r\033[K[+] Low CPU ({cpu_usage}%). Raising RPS to: {dynamic_rps_limit.value}/thread (Total: {dynamic_rps_limit.value * args.threads}/s)", end="", flush=True)
                     
-                elif cpu_usage < 93.0: # Gentle increase to reach safe zone
-                    inc_val = max(1, int(2 / penalty_factor))
+                elif cpu_usage < 90.0: # Gentle increase to reach safe zone (Boost by 3%)
+                    inc_val = max(2, int(current_limit * 0.03))
                     dynamic_rps_limit.value = current_limit + inc_val
-                    last_action = "raise"
-                    if not args.verbose: print(f"\r\033[K[+] CPU ({cpu_usage}% < 93%). Nudging RPS up to: {dynamic_rps_limit.value}/thread (Total: {dynamic_rps_limit.value * args.threads}/s)", end="", flush=True)
+                    if not args.verbose: print(f"\r\033[K[+] CPU ({cpu_usage}% < 90%). Nudging RPS up to: {dynamic_rps_limit.value}/thread (Total: {dynamic_rps_limit.value * args.threads}/s)", end="", flush=True)
                     
             elif not args.verbose:
                  print(f"\r\033[K[*] CPU: {cpu_usage}%. No RPS limit (Full speed).", end="", flush=True)
