@@ -354,34 +354,34 @@ if __name__ == "__main__":
                     drop_val = max(1, int(20 / penalty_factor))
                     dynamic_rps_limit.value = max(10, current_limit - drop_val)
                     last_action = "drop"
-                    if not args.verbose: print(f"\r\033[K[!] High CPU ({cpu_usage}%). Hard drop RPS to: {dynamic_rps_limit.value}/thread", end="", flush=True)
+                    if not args.verbose: print(f"\r\033[K[!] High CPU ({cpu_usage}%). Hard drop RPS to: {dynamic_rps_limit.value}/thread (Total: {dynamic_rps_limit.value * args.threads}/s)", end="", flush=True)
                     
                 elif cpu_usage > 95.0:  # Gentle drop
                     drop_val = max(1, int(5 / penalty_factor))
                     dynamic_rps_limit.value = max(10, current_limit - drop_val)
                     last_action = "drop"
-                    if not args.verbose: print(f"\r\033[K[-] CPU ({cpu_usage}% > 95%). Nudging RPS down to: {dynamic_rps_limit.value}/thread", end="", flush=True)
+                    if not args.verbose: print(f"\r\033[K[-] CPU ({cpu_usage}% > 95%). Nudging RPS down to: {dynamic_rps_limit.value}/thread (Total: {dynamic_rps_limit.value * args.threads}/s)", end="", flush=True)
                     
                 elif cpu_usage >= 93.0: # SAFE ZONE (93-95%)
                     known_good_rps = current_limit
                     last_action = "hold"
-                    if not args.verbose: print(f"\r\033[K[*] CPU: {cpu_usage}%. SAFE ZONE (93-95%). Stable at RPS: {current_limit}/thread.", end="", flush=True)
+                    if not args.verbose: print(f"\r\033[K[*] CPU: {cpu_usage}%. SAFE ZONE (93-95%). Stable at RPS: {current_limit}/thread (Total: {current_limit * args.threads}/s)", end="", flush=True)
                     
                 elif cpu_usage < 40.0: # ALARM!
                     target = max(current_limit + 5, known_good_rps)
                     dynamic_rps_limit.value = min(current_limit + 10, target)
                     last_action = "raise"
-                    if not args.verbose: print(f"\r\033[K[!] ALARM! CPU critically low ({cpu_usage}%). Cautiously raising RPS to: {dynamic_rps_limit.value}/thread", end="", flush=True)
+                    if not args.verbose: print(f"\r\033[K[!] ALARM! CPU critically low ({cpu_usage}%). Cautiously raising RPS to: {dynamic_rps_limit.value}/thread (Total: {dynamic_rps_limit.value * args.threads}/s)", end="", flush=True)
                     
                 elif cpu_usage < 88.0: # Aggressive increase
                     dynamic_rps_limit.value = current_limit + 10
                     last_action = "raise"
-                    if not args.verbose: print(f"\r\033[K[+] Low CPU ({cpu_usage}%). Raising RPS to: {dynamic_rps_limit.value}/thread", end="", flush=True)
+                    if not args.verbose: print(f"\r\033[K[+] Low CPU ({cpu_usage}%). Raising RPS to: {dynamic_rps_limit.value}/thread (Total: {dynamic_rps_limit.value * args.threads}/s)", end="", flush=True)
                     
                 elif cpu_usage < 93.0: # Gentle increase to reach safe zone
                     dynamic_rps_limit.value = current_limit + 2
                     last_action = "raise"
-                    if not args.verbose: print(f"\r\033[K[+] CPU ({cpu_usage}% < 93%). Nudging RPS up to: {dynamic_rps_limit.value}/thread", end="", flush=True)
+                    if not args.verbose: print(f"\r\033[K[+] CPU ({cpu_usage}% < 93%). Nudging RPS up to: {dynamic_rps_limit.value}/thread (Total: {dynamic_rps_limit.value * args.threads}/s)", end="", flush=True)
                     
             elif not args.verbose:
                  print(f"\r\033[K[*] CPU: {cpu_usage}%. No RPS limit (Full speed).", end="", flush=True)
