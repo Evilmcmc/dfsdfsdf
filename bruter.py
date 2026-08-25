@@ -328,7 +328,7 @@ if __name__ == "__main__":
             cpu_usage = psutil.cpu_percent(interval=1.0)
             current_limit = dynamic_rps_limit.value
             
-            if cpu_usage >= 90.0:
+            if cpu_usage > 94.0:
                 if current_limit == 0:
                     dynamic_rps_limit.value = 500 # Start limiting if we weren't
                 else:
@@ -337,18 +337,19 @@ if __name__ == "__main__":
                     dynamic_rps_limit.value = max(10, current_limit - drop_amount)
                 
                 if not args.verbose:
-                    print(f"\r\033[K[!] High CPU ({cpu_usage}%). Dropping RPS limit to: {dynamic_rps_limit.value}/thread", end="", flush=True)
+                    print(f"\r\033[K[!] High CPU ({cpu_usage}% > 93%). Dropping RPS limit to: {dynamic_rps_limit.value}/thread", end="", flush=True)
                     
-            elif cpu_usage < 80.0 and current_limit > 0:
+            elif cpu_usage < 92.0 and current_limit > 0:
                 # Increase RPS slightly if we have breathing room
                 increase_amount = max(5, int(current_limit * 0.05))
                 dynamic_rps_limit.value = current_limit + increase_amount
                 
                 if not args.verbose:
-                    print(f"\r\033[K[+] CPU normal ({cpu_usage}%). Raising RPS limit to: {dynamic_rps_limit.value}/thread", end="", flush=True)
+                    print(f"\r\033[K[+] CPU normal ({cpu_usage}% < 93%). Raising RPS limit to: {dynamic_rps_limit.value}/thread", end="", flush=True)
                     
-            elif not args.verbose and current_limit == 0:
-                 print(f"\r\033[K[*] CPU: {cpu_usage}%. No RPS limit (Full speed).", end="", flush=True)
+            elif not args.verbose:
+                 status_msg = "No RPS limit (Full speed)" if current_limit == 0 else f"Target 93% met. RPS: {current_limit}/thread"
+                 print(f"\r\033[K[*] CPU: {cpu_usage}%. {status_msg}.", end="", flush=True)
                  
     except KeyboardInterrupt:
         print("\n\n[*] Stopping bruter.")
