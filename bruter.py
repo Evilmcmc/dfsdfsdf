@@ -164,15 +164,28 @@ def load_rich_list(filename, lower=False):
     print(f"[+] Loaded {len(addresses)} addresses from {filename}")
     return addresses
 
-def generate_and_check(lock, btc_rich, check_count, verbose, throttle_flag, hash_counter=None):
+def generate_and_check(lock, btc_rich, check_count, verbose, throttle_flag, hash_counter=None, rps_limit=0):
     strength = 128 if WORDS == 12 else 256
     local_counter = 0
+    last_time = time.time()
+    local_rps_counter = 0
     
     while True:
         local_counter += 1
+        local_rps_counter += 1
+        
         if hash_counter is not None:
             hash_counter.value += 1
             
+        # Hard RPS Limiting
+        if rps_limit > 0 and local_rps_counter >= rps_limit:
+            current_time = time.time()
+            elapsed = current_time - last_time
+            if elapsed < 1.0:
+                time.sleep(1.0 - elapsed)
+            last_time = time.time()
+            local_rps_counter = 0
+
         # Adaptive throttling (Extremely aggressive to prevent lockup)
         if local_counter % 100 == 0:
             throttle = throttle_flag.value
@@ -246,7 +259,7 @@ def run_benchmark(btc_rich):
         
         start_time = time.time()
         for _ in range(threads):
-            p = multiprocessing.Process(target=generate_and_check, args=(lock, btc_rich, 1, False, throttle_flag, hash_counter))
+            p = multiprocessing.Process(target=generate_and_check, args=(lock, btc_rich, 1, False, throttle_flag, hash_counter, 0)) # 0 RPS limit during benchmark
             p.start()
             processes.append(p)
             
@@ -279,6 +292,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="High-Performance Crypto Bruter (BTC Only)")
     parser.add_argument("-t", "--threads", type=int, default=0, help="Number of processes to run (default: 0 = run benchmark)")
     parser.add_argument("-n", "--num-addresses", type=int, default=5, help="Number of addresses (indexes) to check per phrase (default: 5)")
+    parser.add_argument("-r", "--rps", type=int, default=0, help="Hard limit of hashes per second per thread (default: 0 = unlimited)")
     parser.add_argument("-v", "--verbose", action="store_true", help="Print every checked address (slows down significantly)")
     args = parser.parse_args()
 
@@ -298,6 +312,8 @@ if __name__ == "__main__":
         args.threads = recommended_threads
     
     print(f"[*] Launching main attack with {args.threads} threads...")
+    if args.rps > 0:
+        print(f"[*] RPS Limit Active: {args.rps} hashes/sec per thread (Total: ~{args.rps * args.threads} hashes/sec)")
     print(f"[*] Generating mnemonics and checking {args.num_addresses} indices per phrase...")
     
     lock = multiprocessing.Lock()
@@ -307,7 +323,7 @@ if __name__ == "__main__":
     
     try:
         for _ in range(args.threads):
-            p = multiprocessing.Process(target=generate_and_check, args=(lock, btc_rich, args.num_addresses, args.verbose, throttle_flag))
+            p = multiprocessing.Process(target=generate_and_check, args=(lock, btc_rich, args.num_addresses, args.verbose, throttle_flag, None, args.rps))
             p.start()
             processes.append(p)
             
