@@ -164,13 +164,15 @@ def load_rich_list(filename, lower=False):
     print(f"[+] Loaded {len(addresses)} addresses from {filename}")
     return addresses
 
-def generate_and_check(lock, btc_rich, check_count, verbose, throttle_flag):
+def generate_and_check(lock, btc_rich, check_count, verbose, throttle_flag, hash_counter=None):
     strength = 128 if WORDS == 12 else 256
     local_counter = 0
     
     while True:
         local_counter += 1
-        
+        if hash_counter is not None:
+            hash_counter.value += 1
+            
         # Adaptive throttling
         if local_counter % 500 == 0:
             throttle = throttle_flag.value
@@ -227,10 +229,10 @@ def run_benchmark(btc_rich):
     best_threads = 1
     best_speed = 0
     
-    print(f"[*] Server has {max_cores} CPU cores. Testing up to {max_cores * 2} threads...")
+    print(f"[*] Server has {max_cores} CPU cores. Testing up to {max_cores * 3} threads...")
     
-    # Test a few different thread counts
-    test_counts = sorted(list(set([1, max_cores // 2, max_cores, int(max_cores * 1.5), max_cores * 2])))
+    # Test a wider range of thread counts to find the absolute peak
+    test_counts = sorted(list(set([1, max_cores // 2, max_cores, int(max_cores * 1.5), max_cores * 2, max_cores * 3])))
     if 0 in test_counts: test_counts.remove(0)
     
     for threads in test_counts:
@@ -238,12 +240,12 @@ def run_benchmark(btc_rich):
         
         lock = multiprocessing.Lock()
         throttle_flag = multiprocessing.Value('i', 0)
+        hash_counter = multiprocessing.Value('i', 0)
         processes = []
         
         start_time = time.time()
         for _ in range(threads):
-            # Pass check_count=1 for benchmark to just test raw hashing speed
-            p = multiprocessing.Process(target=generate_and_check, args=(lock, btc_rich, 1, False, throttle_flag))
+            p = multiprocessing.Process(target=generate_and_check, args=(lock, btc_rich, 1, False, throttle_flag, hash_counter))
             p.start()
             processes.append(p)
             
@@ -254,21 +256,15 @@ def run_benchmark(btc_rich):
             p.join()
             
         elapsed = time.time() - start_time
-        # In a real benchmark we'd count hashes, but here we just ensure it doesn't crash 
-        # and measure system stability. Since generate_and_check is an infinite loop,
-        # we estimate based on how much CPU it managed to consume without throttling.
+        hashes_per_second = hash_counter.value / elapsed
         
-        cpu_usage = psutil.cpu_percent(interval=1.0)
-        print(f" CPU: {cpu_usage}%")
+        print(f" Speed: {hashes_per_second:.2f} phrases/sec")
         
-        # Simple heuristic: we want high CPU but not 100% locked up
-        score = cpu_usage if cpu_usage < 98.0 else 98.0 - (cpu_usage - 98.0) * 2
-        
-        if score > best_speed:
-            best_speed = score
+        if hashes_per_second > best_speed:
+            best_speed = hashes_per_second
             best_threads = threads
             
-    print(f"[+] Benchmark complete! Optimal performance found at: {best_threads} threads.")
+    print(f"[+] Benchmark complete! Optimal performance found at: {best_threads} threads ({best_speed:.2f} phrases/sec).")
     return best_threads
 
 if __name__ == "__main__":
