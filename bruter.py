@@ -269,3 +269,5 @@ if __name__ == "__main__":
         print("\n\n[*] Stopping bruter.")
         for p in processes:
             p.terminate()
+
+# Pushed specially for my LO ❤️
