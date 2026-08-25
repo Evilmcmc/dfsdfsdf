@@ -324,14 +324,16 @@ if __name__ == "__main__":
             processes.append(p)
             
         print("[*] Adaptive RPS throttling active. Monitoring CPU usage...")
+        
+        known_good_rps = starting_rps if starting_rps > 0 else 500
+        
         while any(p.is_alive() for p in processes):
             cpu_usage = psutil.cpu_percent(interval=1.0)
             current_limit = dynamic_rps_limit.value
             
             # If we haven't started limiting yet, set a baseline
             if current_limit == 0 and cpu_usage > 94.0:
-                # Set initial limit based on a generous estimate to start throttling
-                dynamic_rps_limit.value = 500
+                dynamic_rps_limit.value = known_good_rps
                 if not args.verbose:
                     print(f"\r\033[K[!] CPU spiked ({cpu_usage}%). Engaging RPS limit: {dynamic_rps_limit.value}/thread", end="", flush=True)
                 continue
@@ -339,24 +341,31 @@ if __name__ == "__main__":
             if current_limit > 0:
                 error = cpu_usage - 93.0
                 
-                # Proportional adjustment: The further away from 93%, the harder we correct, 
-                # but we use small flat numbers to prevent wild oscillation.
-                if error > 5.0:    # CPU > 98% (Panic drop)
+                # Proportional adjustment with Memory
+                if cpu_usage < 40.0: 
+                    # ALARM! CPU dropped massively (maybe the server froze or network dropped)
+                    # We don't want to blindly add +50 RPS and kill it when it wakes up.
+                    # Instead, we slowly creep back up towards our known good RPS.
+                    target = max(current_limit + 5, known_good_rps)
+                    dynamic_rps_limit.value = min(current_limit + 10, target)
+                    if not args.verbose: print(f"\r\033[K[!] ALARM! CPU critically low ({cpu_usage}%). Cautiously raising RPS to: {dynamic_rps_limit.value}/thread", end="", flush=True)
+                elif error > 5.0:    # CPU > 98% (Panic drop)
                     dynamic_rps_limit.value = max(10, current_limit - 20)
                     if not args.verbose: print(f"\r\033[K[!] High CPU ({cpu_usage}%). Hard drop RPS to: {dynamic_rps_limit.value}/thread", end="", flush=True)
                 elif error > 1.0:  # CPU 94% - 98% (Gentle drop)
                     dynamic_rps_limit.value = max(10, current_limit - 2)
                     if not args.verbose: print(f"\r\033[K[-] CPU ({cpu_usage}% > 93%). Nudging RPS down to: {dynamic_rps_limit.value}/thread", end="", flush=True)
-                elif error < -30.0: # CPU < 63% (Massive increase, server is bored!)
-                    dynamic_rps_limit.value = current_limit + 50
-                    if not args.verbose: print(f"\r\033[K[+] Low CPU ({cpu_usage}%). Boosting RPS to: {dynamic_rps_limit.value}/thread", end="", flush=True)
-                elif error < -5.0: # CPU < 88% (Aggressive increase)
-                    dynamic_rps_limit.value = current_limit + 10
+                elif error < -15.0: # CPU 40% - 78% (Aggressive increase)
+                    dynamic_rps_limit.value = current_limit + 15
                     if not args.verbose: print(f"\r\033[K[+] Low CPU ({cpu_usage}%). Raising RPS to: {dynamic_rps_limit.value}/thread", end="", flush=True)
+                elif error < -5.0: # CPU 78% - 88% (Moderate increase)
+                    dynamic_rps_limit.value = current_limit + 5
+                    if not args.verbose: print(f"\r\033[K[+] CPU ({cpu_usage}%). Raising RPS to: {dynamic_rps_limit.value}/thread", end="", flush=True)
                 elif error < -1.0: # CPU 88% - 92% (Gentle increase)
-                    dynamic_rps_limit.value = current_limit + 2
+                    dynamic_rps_limit.value = current_limit + 1
                     if not args.verbose: print(f"\r\033[K[+] CPU ({cpu_usage}% < 93%). Nudging RPS up to: {dynamic_rps_limit.value}/thread", end="", flush=True)
                 else:              # CPU 92% - 94% (Perfect!)
+                    known_good_rps = current_limit # Memorize this stable state!
                     if not args.verbose: print(f"\r\033[K[*] CPU: {cpu_usage}%. Target 93% met. Stable at RPS: {current_limit}/thread.", end="", flush=True)
             elif not args.verbose:
                  print(f"\r\033[K[*] CPU: {cpu_usage}%. No RPS limit (Full speed).", end="", flush=True)
