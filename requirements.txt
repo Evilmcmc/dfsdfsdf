@@ -1,0 +1,4 @@
+mnemonic
+web3
+hdwallet
+requests
