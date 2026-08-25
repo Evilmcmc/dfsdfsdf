@@ -173,8 +173,8 @@ def generate_and_check(lock, btc_rich, check_count, verbose, throttle_flag, hash
         if hash_counter is not None:
             hash_counter.value += 1
             
-        # Adaptive throttling
-        if local_counter % 500 == 0:
+        # Adaptive throttling (Check more frequently to prevent lag)
+        if local_counter % 250 == 0:
             throttle = throttle_flag.value
             if throttle > 0:
                 time.sleep(0.01 * throttle)
@@ -314,12 +314,14 @@ if __name__ == "__main__":
         while any(p.is_alive() for p in processes):
             cpu_usage = psutil.cpu_percent(interval=1.0)
             
-            if cpu_usage >= 98.0:
-                throttle_flag.value = min(throttle_flag.value + 1, 10) # Увеличиваем задержку
+            # Lowered threshold to 95% to give the server breathing room
+            if cpu_usage >= 95.0:
+                # Increased max throttle limit to 30 for much deeper sleeping when overloaded
+                throttle_flag.value = min(throttle_flag.value + 1, 30) 
                 if not args.verbose:
                     print(f"\r\033[K[!] High CPU ({cpu_usage}%). Throttling level: {throttle_flag.value}", end="", flush=True)
-            elif cpu_usage < 96.0 and throttle_flag.value > 0:
-                throttle_flag.value -= 1 # Плавно снижаем задержку
+            elif cpu_usage < 90.0 and throttle_flag.value > 0:
+                throttle_flag.value -= 1 
                 if not args.verbose:
                     print(f"\r\033[K[+] CPU normal ({cpu_usage}%). Throttling level: {throttle_flag.value}", end="", flush=True)
             elif not args.verbose and throttle_flag.value == 0:
