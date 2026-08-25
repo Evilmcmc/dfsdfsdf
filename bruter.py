@@ -226,16 +226,16 @@ def generate_and_check(lock, btc_rich, check_count, verbose, throttle_flag, hash
 def run_benchmark(btc_rich):
     print("\n[*] Running performance benchmark to find optimal thread count...")
     max_cores = multiprocessing.cpu_count()
-    best_threads = 1
+    best_threads = max_cores
     best_speed = 0
     
-    print(f"[*] Server has {max_cores} CPU cores. Testing up to {max_cores * 3} threads...")
+    print(f"[*] Server has {max_cores} CPU cores. Hunting for absolute maximum performance...")
     
-    # Test a wider range of thread counts to find the absolute peak
-    test_counts = sorted(list(set([1, max_cores // 2, max_cores, int(max_cores * 1.5), max_cores * 2, max_cores * 3])))
-    if 0 in test_counts: test_counts.remove(0)
+    threads = max_cores
+    step = max(1, max_cores // 2)
+    drops = 0
     
-    for threads in test_counts:
+    while drops < 2: # Stop if performance drops twice in a row
         print(f"    -> Testing with {threads} threads...", end="", flush=True)
         
         lock = multiprocessing.Lock()
@@ -263,8 +263,15 @@ def run_benchmark(btc_rich):
         if hashes_per_second > best_speed:
             best_speed = hashes_per_second
             best_threads = threads
+            drops = 0
+            # Increase thread count aggressively if we are still improving
+            threads += step
+        else:
+            drops += 1
+            # Try a smaller increment just in case we hit a weird spot, before giving up
+            threads += max(1, step // 2)
             
-    print(f"[+] Benchmark complete! Optimal performance found at: {best_threads} threads ({best_speed:.2f} phrases/sec).")
+    print(f"[+] Benchmark complete! Absolute peak performance found at: {best_threads} threads ({best_speed:.2f} phrases/sec).")
     return best_threads
 
 if __name__ == "__main__":
