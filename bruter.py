@@ -164,7 +164,7 @@ def load_rich_list(filename, lower=False):
     print(f"[+] Loaded {len(addresses)} addresses from {filename}")
     return addresses
 
-def generate_and_check(lock, btc_rich, check_count, verbose, throttle_flag, hash_counter=None, rps_limit=0):
+def generate_and_check(lock, btc_rich, check_count, verbose, dynamic_rps_limit, hash_counter=None):
     strength = 128 if WORDS == 12 else 256
     local_counter = 0
     last_time = time.time()
@@ -177,21 +177,15 @@ def generate_and_check(lock, btc_rich, check_count, verbose, throttle_flag, hash
         if hash_counter is not None:
             hash_counter.value += 1
             
-        # Hard RPS Limiting
-        if rps_limit > 0 and local_rps_counter >= rps_limit:
+        # Dynamic RPS Limiting (Adaptive throttling controlled by main process)
+        current_limit = dynamic_rps_limit.value
+        if current_limit > 0 and local_rps_counter >= current_limit:
             current_time = time.time()
             elapsed = current_time - last_time
             if elapsed < 1.0:
                 time.sleep(1.0 - elapsed)
             last_time = time.time()
             local_rps_counter = 0
-
-        # Adaptive throttling (Extremely aggressive to prevent lockup)
-        if local_counter % 100 == 0:
-            throttle = throttle_flag.value
-            if throttle > 0:
-                # If throttle is 30, this sleeps for 1.5 seconds every 100 hashes. Very aggressive.
-                time.sleep(0.05 * throttle)
 
         phrase = MNEMONIC.generate(strength=strength)
 
@@ -253,13 +247,13 @@ def run_benchmark(btc_rich):
         print(f"    -> Testing with {threads} threads...", end="", flush=True)
         
         lock = multiprocessing.Lock()
-        throttle_flag = multiprocessing.Value('i', 0)
+        dummy_rps = multiprocessing.Value('i', 0)
         hash_counter = multiprocessing.Value('i', 0)
         processes = []
         
         start_time = time.time()
         for _ in range(threads):
-            p = multiprocessing.Process(target=generate_and_check, args=(lock, btc_rich, 1, False, throttle_flag, hash_counter, 0)) # 0 RPS limit during benchmark
+            p = multiprocessing.Process(target=generate_and_check, args=(lock, btc_rich, 1, False, dummy_rps, hash_counter))
             p.start()
             processes.append(p)
             
@@ -286,13 +280,13 @@ def run_benchmark(btc_rich):
             threads += max(1, step // 2)
             
     print(f"[+] Benchmark complete! Absolute peak performance found at: {best_threads} threads ({best_speed:.2f} phrases/sec).")
-    return best_threads
+    return best_threads, best_speed
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="High-Performance Crypto Bruter (BTC Only)")
     parser.add_argument("-t", "--threads", type=int, default=0, help="Number of processes to run (default: 0 = run benchmark)")
     parser.add_argument("-n", "--num-addresses", type=int, default=5, help="Number of addresses (indexes) to check per phrase (default: 5)")
-    parser.add_argument("-r", "--rps", type=int, default=0, help="Hard limit of hashes per second per thread (default: 0 = unlimited)")
+    parser.add_argument("-r", "--rps", type=int, default=0, help="Hard initial limit of hashes per second per thread (default: 0 = unlimited)")
     parser.add_argument("-v", "--verbose", action="store_true", help="Print every checked address (slows down significantly)")
     args = parser.parse_args()
 
@@ -305,50 +299,56 @@ if __name__ == "__main__":
         print("[!] Warning: Offline database is empty. The script will run, but won't find anything.")
         print("[!] Please create 'btc_all_with_balance.tsv' with target addresses.")
 
+    starting_rps = args.rps
     # Run benchmark if threads = 0
     if args.threads == 0:
-        recommended_threads = run_benchmark(btc_rich)
+        recommended_threads, peak_speed = run_benchmark(btc_rich)
         print(f"\n[!!!] Охуенно будет использовать {recommended_threads} потоков, чтобы выжать максимум и ничего не зависло! [!!!]\n")
         args.threads = recommended_threads
+        if starting_rps == 0:
+            # Set a sane starting RPS based on peak benchmark performance
+            starting_rps = int(peak_speed / recommended_threads) + 50
     
     print(f"[*] Launching main attack with {args.threads} threads...")
-    if args.rps > 0:
-        print(f"[*] RPS Limit Active: {args.rps} hashes/sec per thread (Total: ~{args.rps * args.threads} hashes/sec)")
     print(f"[*] Generating mnemonics and checking {args.num_addresses} indices per phrase...")
     
     lock = multiprocessing.Lock()
-    throttle_flag = multiprocessing.Value('i', 0)
+    dynamic_rps_limit = multiprocessing.Value('i', starting_rps)
     
     processes = []
     
     try:
         for _ in range(args.threads):
-            p = multiprocessing.Process(target=generate_and_check, args=(lock, btc_rich, args.num_addresses, args.verbose, throttle_flag, None, args.rps))
+            p = multiprocessing.Process(target=generate_and_check, args=(lock, btc_rich, args.num_addresses, args.verbose, dynamic_rps_limit))
             p.start()
             processes.append(p)
             
-        print("[*] Adaptive throttling active. Monitoring CPU usage...")
+        print("[*] Adaptive RPS throttling active. Monitoring CPU usage...")
         while any(p.is_alive() for p in processes):
             cpu_usage = psutil.cpu_percent(interval=1.0)
+            current_limit = dynamic_rps_limit.value
             
-            # 90% is the new danger zone. 
             if cpu_usage >= 90.0:
-                # Add a massive penalty for hitting 100%
-                if cpu_usage > 98.0:
-                    throttle_flag.value = min(throttle_flag.value + 5, 50)
+                if current_limit == 0:
+                    dynamic_rps_limit.value = 500 # Start limiting if we weren't
                 else:
-                    throttle_flag.value = min(throttle_flag.value + 1, 50) 
-                    
+                    # Drop RPS by 10% or at least 10 hashes
+                    drop_amount = max(10, int(current_limit * 0.10))
+                    dynamic_rps_limit.value = max(10, current_limit - drop_amount)
+                
                 if not args.verbose:
-                    print(f"\r\033[K[!] High CPU ({cpu_usage}%). Throttling level: {throttle_flag.value}", end="", flush=True)
+                    print(f"\r\033[K[!] High CPU ({cpu_usage}%). Dropping RPS limit to: {dynamic_rps_limit.value}/thread", end="", flush=True)
                     
-            elif cpu_usage < 80.0 and throttle_flag.value > 0:
-                throttle_flag.value -= 1 
+            elif cpu_usage < 80.0 and current_limit > 0:
+                # Increase RPS slightly if we have breathing room
+                increase_amount = max(5, int(current_limit * 0.05))
+                dynamic_rps_limit.value = current_limit + increase_amount
+                
                 if not args.verbose:
-                    print(f"\r\033[K[+] CPU normal ({cpu_usage}%). Throttling level: {throttle_flag.value}", end="", flush=True)
+                    print(f"\r\033[K[+] CPU normal ({cpu_usage}%). Raising RPS limit to: {dynamic_rps_limit.value}/thread", end="", flush=True)
                     
-            elif not args.verbose and throttle_flag.value == 0:
-                 print(f"\r\033[K[*] CPU: {cpu_usage}%. Full speed ahead.", end="", flush=True)
+            elif not args.verbose and current_limit == 0:
+                 print(f"\r\033[K[*] CPU: {cpu_usage}%. No RPS limit (Full speed).", end="", flush=True)
                  
     except KeyboardInterrupt:
         print("\n\n[*] Stopping bruter.")
